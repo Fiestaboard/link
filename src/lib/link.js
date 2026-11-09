@@ -62,7 +62,8 @@ const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
  * stricter: all of 0.0.0.0/8, and IPv4 loopback written as an IPv6 address.
  */
 export function isLoopbackHost(hostname) {
-  const host = String(hostname).toLowerCase().replace(/\.$/, "");
+  // Every trailing dot: "localhost.." is still localhost to some resolvers.
+  const host = String(hostname).toLowerCase().replace(/\.+$/, "");
   if (host === "" || host === "localhost" || host.endsWith(".localhost")) return true;
   const v4 = IPV4.exec(host);
   if (v4) {
@@ -84,6 +85,72 @@ export function isLoopbackHost(hostname) {
   return false;
 }
 
+// The checks a hub address passes, in order. Each is a separate layer on
+// purpose, and each is exported so tests/link.test.js can prove every one
+// refuses its inputs on its own: removing any layer must fail a test even when
+// another layer would still refuse the same address.
+//
+// Each returns null (pass) or a refusal reason.
+
+/** Layer 1, the raw text: type, length, characters, scheme, no ? or #. */
+function checkRawText(raw) {
+  if (typeof raw !== "string" || raw === "") return "missing";
+  if (raw.length > MAX_HUB_LENGTH) return "malformed";
+  // No whitespace, control characters or backslashes anywhere: the URL parser
+  // would quietly drop or reinterpret them, and the hub never sends them.
+  if (/[\s\u0000-\u001f\u007f-\u009f\\]/.test(raw)) return "malformed";
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(raw);
+  if (!scheme) return "malformed";
+  const name = scheme[1].toLowerCase();
+  if (name !== "http" && name !== "https") return "scheme";
+  if (!/^https?:\/\/[^/]/i.test(raw)) return "malformed";
+  if (raw.includes("?") || raw.includes("#")) return "malformed";
+  return null;
+}
+
+/** The authority ("host:port", maybe with userinfo) as written. */
+function rawAuthority(raw) {
+  return raw.slice(raw.indexOf("//") + 2).split("/")[0];
+}
+
+/** The path as written, without one trailing slash. */
+function rawPathOf(raw) {
+  return raw.slice(raw.indexOf("//") + 2 + rawAuthority(raw).length).replace(/\/$/, "");
+}
+
+/** Layer 2, the raw authority: no userinfo, even an empty one ("http://@host"). */
+function checkRawAuthority(raw) {
+  return rawAuthority(raw).includes("@") ? "credentials" : null;
+}
+
+/**
+ * Layer 3, the raw path, before the URL parser can resolve "..", "%2e" or
+ * escape characters: a plain base path or nothing.
+ */
+function checkRawPath(raw) {
+  const rawPath = rawPathOf(raw);
+  if (!HUB_PATH.test(rawPath)) return "malformed";
+  const segments = rawPath.split("/").slice(1);
+  if (segments.some((segment) => segment === "" || /^(\.|%2e){1,2}$/i.test(segment))) return "malformed";
+  return null;
+}
+
+/** Layer 4, the parsed URL: protocol, credentials, query, fragment, host, loopback. */
+function checkParsed(url) {
+  if (url.protocol !== "http:" && url.protocol !== "https:") return "scheme";
+  if (url.username || url.password) return "credentials";
+  if (url.search || url.hash || !url.hostname) return "malformed";
+  if (isLoopbackHost(url.hostname)) return "loopback";
+  return null;
+}
+
+/** Layer 5, agreement: the parsed path must be exactly the path as written. */
+function checkPathAgrees(url, raw) {
+  return url.pathname.replace(/\/$/, "") === rawPathOf(raw) ? null : "malformed";
+}
+
+export const HUB_LAYERS = { checkRawText, checkRawAuthority, checkRawPath, checkParsed, checkPathAgrees };
+
 /**
  * Parse a hub address from a link.
  *
@@ -93,45 +160,18 @@ export function isLoopbackHost(hostname) {
  * missing | malformed | scheme | credentials | loopback.
  */
 export function parseHub(raw) {
-  if (typeof raw !== "string" || raw === "") return { ok: false, reason: "missing" };
-  if (raw.length > MAX_HUB_LENGTH) return { ok: false, reason: "malformed" };
-  // No whitespace, control characters or backslashes anywhere: the URL parser
-  // would quietly drop or reinterpret them, and the hub never sends them.
-  if (/[\s\u0000-\u001f\u007f-\u009f\\]/.test(raw)) return { ok: false, reason: "malformed" };
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(raw);
-  if (!scheme) return { ok: false, reason: "malformed" };
-  const name = scheme[1].toLowerCase();
-  if (name !== "http" && name !== "https") return { ok: false, reason: "scheme" };
-  if (!/^https?:\/\/[^/]/i.test(raw)) return { ok: false, reason: "malformed" };
-  if (raw.includes("?") || raw.includes("#")) return { ok: false, reason: "malformed" };
-
+  const refused = (reason) => ({ ok: false, reason });
+  let reason = checkRawText(raw) ?? checkRawAuthority(raw) ?? checkRawPath(raw);
+  if (reason) return refused(reason);
   let url;
   try {
     url = new URL(raw);
   } catch {
-    return { ok: false, reason: "malformed" };
+    return refused("malformed");
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, reason: "scheme" };
-  // "http://@host" parses with an empty username, so look at the raw text too.
-  const authority = raw.slice(raw.indexOf("//") + 2).split("/")[0];
-  if (url.username || url.password || authority.includes("@")) {
-    return { ok: false, reason: "credentials" };
-  }
-  if (url.search || url.hash || !url.hostname) return { ok: false, reason: "malformed" };
-  if (isLoopbackHost(url.hostname)) return { ok: false, reason: "loopback" };
-
-  // Check the path as written, before the URL parser resolves "..", "%2e" or
-  // escapes characters: a hub address is a plain base path or nothing.
-  const rawPath = raw.slice(raw.indexOf("//") + 2 + authority.length).replace(/\/$/, "");
-  const segments = rawPath.split("/").slice(1);
-  if (
-    !HUB_PATH.test(rawPath) ||
-    segments.some((segment) => segment === "" || /^(\.|%2e){1,2}$/i.test(segment))
-  ) {
-    return { ok: false, reason: "malformed" };
-  }
+  reason = checkParsed(url) ?? checkPathAgrees(url, raw);
+  if (reason) return refused(reason);
   const path = url.pathname.replace(/\/$/, "");
-  if (path !== rawPath) return { ok: false, reason: "malformed" };
   return {
     ok: true,
     hub: { base: url.origin + path, display: url.host + path, secure: url.protocol === "https:" },
@@ -173,9 +213,12 @@ export function cleanName(raw) {
   if (typeof raw !== "string") return null;
   const name = raw.trim();
   if (name === "" || name.length > MAX_NAME_LENGTH) return null;
-  // Control characters, and the bidirectional overrides and zero-width
-  // characters that make text read differently from what it is.
-  if (/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/.test(name)) return null;
+  // Control and format characters (bidirectional marks and overrides,
+  // zero-width characters, U+061C, U+2060-2064, U+FEFF, U+180E), line and
+  // paragraph separators, and the Hangul fillers that render as blank space:
+  // anything that makes the text read differently from what it is. Written as
+  // escapes so no editor can strip them.
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u115F\u1160\u3164\uFFA0]/u.test(name)) return null;
   return name;
 }
 

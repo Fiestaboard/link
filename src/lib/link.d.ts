@@ -35,3 +35,12 @@ export function parseFragment(hash: string | null | undefined): Map<string, stri
 export function cleanName(raw: unknown): string | null;
 export function routeFromPath(pathname: string): Route | "" | "unknown";
 export function planLink(pathname: string, hash: string): Plan;
+
+type Layer = (raw: string) => HubRefusal | null;
+export const HUB_LAYERS: {
+  checkRawText: (raw: unknown) => HubRefusal | null;
+  checkRawAuthority: Layer;
+  checkRawPath: Layer;
+  checkParsed: (url: URL) => HubRefusal | null;
+  checkPathAgrees: (url: URL, raw: string) => HubRefusal | null;
+};

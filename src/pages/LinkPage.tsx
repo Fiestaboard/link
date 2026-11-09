@@ -11,8 +11,8 @@
  * "reading" view, so the first client render must be that too; the real view
  * is chosen in an effect.
  */
-import { CircleHelp, Frame, Link2Off, ShieldX } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { CircleHelp, Frame, Link2Off, ShieldAlert, ShieldX } from "lucide-react";
+import { type ReactNode, type Ref, useEffect, useRef, useState } from "react";
 
 import { isPublished, STORES } from "../config";
 import { isFramed } from "../lib/frame";
@@ -30,7 +30,7 @@ import {
 } from "../ui";
 import { PageHeading, Shell } from "./Shell";
 
-type View = { kind: "reading" } | { kind: "framed" } | Plan;
+export type View = { kind: "reading" } | { kind: "framed" } | Plan;
 
 const REASONS: Record<InvalidReason, string> = {
   loopback:
@@ -46,9 +46,6 @@ const REASONS: Record<InvalidReason, string> = {
   page: "The page in it isn't one FiestaBoard makes.",
 };
 
-function hubLabel(name: string | null): string {
-  return name ?? "your hub";
-}
 
 function title(view: View): string {
   switch (view.kind) {
@@ -63,9 +60,11 @@ function title(view: View): string {
     case "invalid":
       return "This link can't be used";
     case "link":
-      if (view.route === "pair") return `Connect to ${hubLabel(view.name)}`;
-      if (view.route === "activate") return `Approve a sign-in on ${hubLabel(view.name)}`;
-      return `Open a page on ${hubLabel(view.name)}`;
+      // The validated address, never the link's `name`: a name can say
+      // anything, including another hub's address.
+      if (view.route === "pair") return `Connect to ${view.hub.display}`;
+      if (view.route === "activate") return `Approve a sign-in on ${view.hub.display}`;
+      return `Open a page on ${view.hub.display}`;
   }
 }
 
@@ -106,20 +105,26 @@ function StoreButtons() {
 }
 
 function LinkDescription({ plan }: { plan: Extract<Plan, { kind: "link" }> }) {
-  // The hub address is a text node inside <Code>: React escapes it, and it is
-  // never put into HTML any other way.
-  const address = <Code className="break-words">{plan.hub.display}</Code>;
+  // Everything here is a text node: React escapes it, and nothing from the
+  // link is ever put into the page as HTML. The hub's own name is secondary,
+  // and labelled as what the hub calls itself, because the link can say
+  // anything there.
+  const named = plan.name && (
+    <span className="mt-1 block" data-testid="hub-name">
+      It calls itself “{plan.name}”.
+    </span>
+  );
   if (plan.route === "pair") {
-    return <>This link opens the FiestaBoard app and connects it to your hub at {address}.</>;
+    return <>This link opens the FiestaBoard app and connects it to this hub.{named}</>;
   }
   if (plan.route === "activate") {
     return (
       <>
-        This link opens the FiestaBoard app to approve the code <Code>{plan.code}</Code> on your hub at {address}.
+        This link opens the FiestaBoard app to approve the code <Code>{plan.code}</Code> on this hub.{named}
       </>
     );
   }
-  return <>This link opens a page in the FiestaBoard app on your hub at {address}.</>;
+  return <>This link opens a page in the FiestaBoard app on this hub.{named}</>;
 }
 
 const BROWSER_HINTS: Record<"pair" | "activate" | "open", string> = {
@@ -150,11 +155,20 @@ export function LinkPage({ home = false }: { home?: boolean }) {
     if (next.kind !== "link" && next.kind !== "home") heading.current?.focus();
   }, []);
 
+  return <LinkView view={view} headingRef={heading} />;
+}
+
+/**
+ * The page for one view, with no access to the browser: every URL on it comes
+ * from `view`, which only planLink() builds. tests/render.test.js renders it
+ * in Node to prove that.
+ */
+export function LinkView({ view, headingRef }: { view: View; headingRef?: Ref<HTMLHeadingElement> }) {
   const description = view.kind === "link" ? <LinkDescription plan={view} /> : undefined;
 
   return (
     <Shell showBrandIcon={view.kind !== "reading"}>
-      <PageHeading ref={heading} icon={ICONS[view.kind]} description={description}>
+      <PageHeading ref={headingRef} icon={ICONS[view.kind]} description={description}>
         {title(view)}
       </PageHeading>
 
@@ -167,6 +181,15 @@ export function LinkPage({ home = false }: { home?: boolean }) {
 
         {view.kind === "link" && (
           <Stack gap="5">
+            {view.route === "activate" && (
+              // RFC 8628 §5.4: a device code can be started by anyone and sent
+              // to someone else to approve.
+              <Alert variant="warning" data-testid="activate-warning">
+                <ShieldAlert aria-hidden="true" />
+                <AlertTitle>Only approve a code your own TV is showing</AlertTitle>
+                <AlertDescription>If someone sent you this link, don't approve it.</AlertDescription>
+              </Alert>
+            )}
             <Stack gap="3">
               <Button asChild variant="brand" size="lg" className="w-full">
                 <a href={view.appUrl}>Open in the FiestaBoard app</a>
@@ -177,9 +200,10 @@ export function LinkPage({ home = false }: { home?: boolean }) {
               <Text size="sm" tone="muted">
                 {BROWSER_HINTS[view.route]}
               </Text>
-              <Button asChild variant="secondary" size="lg" className="w-full">
-                <a href={view.browserUrl} rel="noreferrer">
-                  Continue in your browser
+              <Button asChild variant="secondary" size="lg" className="h-auto min-h-10 w-full whitespace-normal py-2 text-center">
+                {/* The destination is on the control that goes there. */}
+                <a href={view.browserUrl} rel="noreferrer" data-testid="continue" className="[overflow-wrap:anywhere]">
+                  Continue to {view.hub.display}
                 </a>
               </Button>
             </Stack>

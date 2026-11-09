@@ -3,3 +3,4 @@ dist/
 dist-ssr/
 .playwright-mcp/
 .DS_Store
+dist-render/

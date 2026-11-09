@@ -9,8 +9,10 @@ import { test } from "node:test";
 
 const dist = resolve(import.meta.dirname, "../dist");
 const PAGES = ["index.html", "pair.html", "activate.html", "open.html"];
-const CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'";
+// Path-scoped, not 'self': 'self' would be all of fiestaboard.app. See
+// vite.config.ts; LINK_CSP_BASE only changes for a local preview build.
+const BASE = process.env.LINK_CSP_BASE ?? "https://fiestaboard.app/link/";
+const CSP = `default-src 'none'; script-src ${BASE}; style-src ${BASE}; img-src ${BASE} data:; font-src ${BASE}; base-uri 'none'; form-action 'none'`;
 
 const read = (path) => readFileSync(resolve(dist, path), "utf8");
 const attributes = (html, tag, name) =>

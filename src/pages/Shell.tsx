@@ -64,7 +64,7 @@ export function PageHeading({
         ref={ref}
         tabIndex={-1}
         icon={icon}
-        className="text-xl text-balance outline-none items-start [&_svg:not([class*='size-'])]:size-5"
+        className="text-xl text-balance [overflow-wrap:anywhere] outline-none items-start [&_svg:not([class*='size-'])]:size-5"
       >
         {children}
       </CardTitle>

@@ -10,7 +10,8 @@
     "preview": "vite preview --port 8787",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/link.test.js",
-    "test:dist": "node --test tests/dist.test.js"
+    "test:dist": "node --test tests/dist.test.js",
+    "test:render": "vite build --ssr src/render.tsx --outDir dist-render --emptyOutDir --logLevel warn && node --test tests/render.test.js"
   },
   "dependencies": {
     "@fiestaboard/ui": "8.13.1",

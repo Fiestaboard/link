@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { cleanName, isLoopbackHost, parseFragment, parseHub, planLink, routeFromPath } from "../src/lib/link.js";
+import { HUB_LAYERS, cleanName, isLoopbackHost, parseFragment, parseHub, planLink, routeFromPath } from "../src/lib/link.js";
 
 const PAIR_CODE = "fb_pair_Zx9-Qw_3vLm8PpRtYuIoKjHg";
 
@@ -34,6 +34,9 @@ const refusedHubs = [
   ["http://localhost:4420", "loopback"],
   ["http://LOCALHOST", "loopback"],
   ["http://localhost.:4420", "loopback"],
+  ["http://localhost..", "loopback"],
+  ["http://localhost...:4420", "loopback"],
+  ["http://board.localhost..", "loopback"],
   ["http://board.localhost", "loopback"],
   ["http://127.0.0.1:4420", "loopback"],
   ["http://127.8.9.10", "loopback"],
@@ -109,6 +112,61 @@ test("loopback check mirrors the hub's is_loopback", () => {
   }
 });
 
+// ---------------------------------------------------------------- each layer alone
+
+// parseHub runs several layers, and some inputs are refused by more than one.
+// Each layer is tested on its own here, so removing any one of them fails a
+// test even when another layer would still catch the same input.
+const { checkRawText, checkRawAuthority, checkRawPath, checkParsed, checkPathAgrees } = HUB_LAYERS;
+const GOOD = "http://fiestapi.local:4420/base";
+
+test("layer: raw text", () => {
+  assert.equal(checkRawText(GOOD), null);
+  assert.equal(checkRawText(undefined), "missing");
+  assert.equal(checkRawText("javascript:alert(1)"), "scheme");
+  assert.equal(checkRawText("192.168.1.50"), "malformed");
+  assert.equal(checkRawText(" http://h"), "malformed");
+  assert.equal(checkRawText("http://h\\x"), "malformed");
+  assert.equal(checkRawText("http://h/?"), "malformed"); // url.search is "" for a bare "?"
+  assert.equal(checkRawText("http://h/#"), "malformed"); // url.hash is "" for a bare "#"
+  assert.equal(checkRawText("http:/h"), "malformed");
+});
+
+test("layer: raw authority", () => {
+  assert.equal(checkRawAuthority(GOOD), null);
+  assert.equal(checkRawAuthority("http://@h"), "credentials"); // username parses as ""
+  assert.equal(checkRawAuthority("http://u@h"), "credentials");
+});
+
+test("layer: raw path", () => {
+  assert.equal(checkRawPath(GOOD), null);
+  assert.equal(checkRawPath("http://h"), null);
+  assert.equal(checkRawPath("http://h/a/./b"), "malformed");
+  assert.equal(checkRawPath("http://h/a/../b"), "malformed");
+  assert.equal(checkRawPath("http://h/%2E%2E"), "malformed");
+  assert.equal(checkRawPath("http://h/a/%2e/b"), "malformed");
+  assert.equal(checkRawPath("http://h//a"), "malformed");
+  assert.equal(checkRawPath("http://h/<b>"), "malformed");
+});
+
+test("layer: parsed URL", () => {
+  assert.equal(checkParsed(new URL(GOOD)), null);
+  assert.equal(checkParsed(new URL("ftp://h")), "scheme");
+  assert.equal(checkParsed(new URL("http://u:p@h")), "credentials");
+  assert.equal(checkParsed(new URL("http://h/?q=1")), "malformed");
+  assert.equal(checkParsed(new URL("http://h/#x")), "malformed");
+  assert.equal(checkParsed(new URL("http://0x7f.1")), "loopback");
+  assert.equal(checkParsed(new URL("http://[::1]")), "loopback");
+});
+
+test("layer: parsed path agrees with the path as written", () => {
+  assert.equal(checkPathAgrees(new URL(GOOD), GOOD), null);
+  assert.equal(checkPathAgrees(new URL(`${GOOD}/`), `${GOOD}/`), null);
+  for (const raw of ["http://h/a/./b", "http://h/a/%2e/b", "http://h/a/../b", "http://h/%2E%2E"]) {
+    assert.equal(checkPathAgrees(new URL(raw), raw), "malformed", raw);
+  }
+});
+
 // ---------------------------------------------------------------- fragment
 
 test("fragment: decodes fields", () => {
@@ -156,6 +214,12 @@ test("name: plain text kept, odd text dropped", () => {
   assert.equal(cleanName("Kit​chen"), null); // zero-width space
   assert.equal(cleanName("Kitchen\nBoard"), null);
   assert.equal(cleanName(undefined), null);
+  // Written as escapes so the test can't silently lose them either.
+  for (const invisible of ["\u2028", "\u2029", "\u061C", "\u2060", "\u2061", "\u2064", "\u180E", "\u115F", "\u1160",
+    "\u3164", "\uFFA0", "\u200B", "\u200D", "\u200E", "\u202A", "\u202E", "\u2066", "\u2069", "\uFEFF", "\u00AD"]) {
+    assert.equal(cleanName(`Kitchen${invisible}Board`), null, `U+${invisible.codePointAt(0).toString(16)}`);
+  }
+  assert.equal(cleanName("Küche Ünö 台所 🎉"), "Küche Ünö 台所 🎉");
 });
 
 // ---------------------------------------------------------------- routes

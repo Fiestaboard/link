@@ -24,6 +24,8 @@ jobs:
       - run: npm ci
       - name: Unit tests (link parsing and validation)
         run: npm test
+      - name: Rendered-page tests (headings, hrefs, warnings)
+        run: npm run test:render
       - name: Typecheck, build and prerender
         run: npm run build
       - name: Built-site invariants (CSP, no inline code, no requests)

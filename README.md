@@ -69,12 +69,25 @@ has a test in [`tests/link.test.js`](tests/link.test.js), hostile inputs include
   never disagree about which value counts.
 - **Rebuilt, not copied.** The `fiestaboard://` and hub URLs are assembled from the validated
   values only.
+- **The real destination is what you read.** The heading names the validated hub address, and
+  the browser button says where it goes ("Continue to fiestapi.local:4420"). The link's `name`
+  is unverified (a link can say anything there, including another hub's address), so it only
+  appears as secondary text: "It calls itself “…”".
 - **Text, never HTML.** The hub address and name are React text nodes; nothing is put into the
-  page as HTML. Names with control, zero-width or bidirectional-override characters are dropped.
-- **No code from other hosts.** No analytics and no scripts, styles or fonts loaded from anywhere
-  but this site. Each page sets a Content-Security-Policy of `default-src 'none'` that allows
-  only its own files, sends no referrer, and refuses to work inside a frame (GitHub Pages can't
-  send `frame-ancestors`, so that check is in script). `npm run test:dist` fails the build if a
+  page as HTML. Names with control or format characters (bidirectional marks, zero-width
+  characters, U+061C, U+2060–2064, U+FEFF), line or paragraph separators, or Hangul fillers are
+  dropped. `tests/render.test.js` renders the page in Node and checks every `href` and heading.
+- **Device codes.** The `activate` page warns "Only approve a code your own TV is showing": a
+  device code can be started by anyone and sent to someone else to approve (RFC 8628 §5.4).
+- **No code from other hosts, or from the rest of fiestaboard.app.** No analytics and no
+  scripts, styles or fonts loaded from anywhere but this site. Each page sets a
+  Content-Security-Policy of `default-src 'none'` whose `script-src`, `style-src`, `img-src` and
+  `font-src` are the path `https://fiestaboard.app/link/`, not `'self'`: this site shares its
+  origin with the documentation site, and `'self'` would trust every script served there. The
+  source pages say `'self'` so `npm run dev` works; the build narrows them
+  (`vite.config.ts`). The policy is a `<meta>` tag, since GitHub Pages can't send headers, so
+  it can't carry `frame-ancestors`. Each page sends no referrer, and refuses to work inside a
+  frame (that check is in script instead). `npm run test:dist` fails the build if a
   page gains an inline script or style, or a script starts reading the query string, making
   requests or using storage.
 
@@ -112,10 +125,12 @@ same way as [Fiestaboard/auth](https://github.com/Fiestaboard/auth).
 ```sh
 npm install
 npm test          # unit tests for link parsing and validation
+npm run test:render # the rendered page: headings, hrefs, warnings
 npm run dev       # dev server with hot reload
 npm run build     # typecheck, build and prerender into dist/
 npm run test:dist # invariants of the built site (CSP, no inline code, no requests)
-npm run preview   # serve dist/ at http://localhost:8787
+LINK_CSP_BASE=http://localhost:8787/ npm run build && npm run preview
+                  # preview a build locally (the CSP names the address it is served from)
 ```
 
 Changes to `src/lib/link.js` need a test in `tests/`. For anything that loosens what a link may
